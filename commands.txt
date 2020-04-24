@@ -1,0 +1,119 @@
+########### Prepare Directory & Contents ###########
+# Change directory
+cd /home/jupyter/w205/project-3-alisto92
+
+# Check branch (should be assignment)
+git status
+
+# Copy in YAML file - do this only once
+cp ~/w205/course-content/12-Querying-Data-II/docker-compose.yml .
+
+# Copy in game API file - do this only once
+cp ~/w205/course-content/12-Querying-Data-II/game_api.py .
+
+# Add events to game API file - do this only once
+vi game_api.py 
+# add (and make sure to fix indents): 
+@app.route("/purchase_a_knife")
+def purchase_a_knife():
+    purchase_knife_event = {'event_type': 'purchase_knife','description': 'very sharp knife'}
+    log_to_kafka('events', purchase_knife_event)
+    return "Knife Purchased!\n"
+
+@app.route("/join_guild")
+def join_guild():
+    join_guild_event = {'event_type': 'join_guild',
+	'description': 'large guild'}
+    log_to_kafka('events', join_guild_event)
+    return "Guild Joined!\n"
+
+########### Docker ###########
+
+# check stray containers
+docker ps -a 
+
+# remove 
+docker rm -f xxxxx
+
+# don't remove this one:
+6793591eaeab        gcr.io/inverting-proxy/agent   "/bin/sh -c '/opt/bi…"   3 hours ago         Up 3 hours                              proxy-agent
+
+# check network
+docker network ls 
+
+# should see this output:
+#NETWORK ID          NAME                DRIVER              SCOPE
+#50435135c012        bridge              bridge              local
+#7faf4695f1bf        host                host                local
+#5557405dd1c5        none                null                local
+
+# remove all networks not used by at least one container (must type "y" to confirm)
+docker network prune
+
+# remove specific networks
+docker network rm xxxx
+
+# Bring up cluster
+docker-compose up -d
+
+# should see output similar to the following:
+#CONTAINER ID        IMAGE                              COMMAND                  CREATED             STATUS         
+#     PORTS                                                                                NAMES
+#8ac7e3dfbac1        midsw205/spark-python:0.0.5        "docker-entrypoint.s…"   4 seconds ago       Up 2 seconds   
+#     0.0.0.0:8888->8888/tcp                                                               project3alisto92_spark_1
+#3fdd581508fc        confluentinc/cp-kafka:latest       "/etc/confluent/dock…"   4 seconds ago       Up 3 seconds   
+#     9092/tcp, 29092/tcp                                                                  project3alisto92_kafka_1
+#7ec029c0006a        midsw205/base:0.1.9                "/bin/bash"              6 seconds ago       Up 4 seconds   
+#     0.0.0.0:5000->5000/tcp, 8888/tcp                                                     project3alisto92_mids_1
+#04dbb8dfb7da        confluentinc/cp-zookeeper:latest   "/etc/confluent/dock…"   6 seconds ago       Up 4 seconds   
+#     2181/tcp, 2888/tcp, 3888/tcp, 32181/tcp                                              project3alisto92_zookeepe
+#r_1
+#f8d647aef253        midsw205/cdh-minimal:latest        "cdh_startup_script.…"   6 seconds ago       Up 4 seconds   
+#     8020/tcp, 8088/tcp, 8888/tcp, 9090/tcp, 11000/tcp, 11443/tcp, 19888/tcp, 50070/tcp   project3alisto92_cloudera
+#_1
+#c117edc7565b        gcr.io/inverting-proxy/agent       "/bin/sh -c '/opt/bi…"   42 minutes ago      Up 42 minutes   #                                                                                        proxy-agent
+
+########### Kafka - event streaming ###########
+
+# Create topic called "events"
+docker-compose exec kafka kafka-topics --create --topic events --partitions 1 --replication-factor 1 --if-not-exists --zookeeper zookeeper:32181
+
+########### Flask - instrument API server ###########
+
+# Run Flask in one CLI window
+docker-compose exec mids env FLASK_APP=/w205/project-3-alisto92/game_api.py flask run --host 0.0.0.0
+
+########### Apache Bench - generate test data for pipeline ###########
+
+# Generate data with Apache Bench in a different CLI window
+# The following represent 2 users (user1.comcast.com & user2.att.com) generating 10 of each event (default, purchase_a_sword, purchase_a_knife, join_guild)
+docker-compose exec mids ab -n 10 -H "Host: user1.comcast.com" http://localhost:5000/
+docker-compose exec mids ab -n 10 -H "Host: user2.att.com" http://localhost:5000/
+docker-compose exec mids ab -n 10 -H "Host: user1.comcast.com" http://localhost:5000/purchase_a_sword
+docker-compose exec mids ab -n 10 -H "Host: user2.att.com" http://localhost:5000/purchase_a_sword
+docker-compose exec mids ab -n 10 -H "Host: user1.comcast.com" http://localhost:5000/purchase_a_knife
+docker-compose exec mids ab -n 10 -H "Host: user2.att.com" http://localhost:5000/purchase_a_knife
+docker-compose exec mids ab -n 10 -H "Host: user1.comcast.com" http://localhost:5000/join_a_guild
+docker-compose exec mids ab -n 10 -H "Host: user2.att.com" http://localhost:5000/join_a_guild
+
+# These are optional event types - and in the following these 2 users generate 10 of each type
+docker-compose exec mids ab -n 10 -H "Host: user1.comcast.com" http://localhost:5000/purchase_a_shield
+docker-compose exec mids ab -n 10 -H "Host: user2.att.com" http://localhost:5000/purchase_a_shield
+docker-compose exec mids ab -n 10 -H "Host: user1.comcast.com" http://localhost:5000/declare_ones_fealty
+docker-compose exec mids ab -n 10 -H "Host: user2.att.com" http://localhost:5000/declare_ones_fealty
+docker-compose exec mids ab -n 10 -H "Host: user1.comcast.com" http://localhost:5000/declare_a_war
+docker-compose exec mids ab -n 10 -H "Host: user2.att.com" http://localhost:5000/declare_a_war
+
+########### Run Apache Spark in Jupyter Notebook ###########
+
+# Link to Jupyter Notebook
+# create symbolic link so we can access mounted w205 directory
+docker-compose exec spark bash
+ln -s /w205 w205
+exit
+# spin up notebook
+docker-compose exec spark env PYSPARK_DRIVER_PYTHON=jupyter PYSPARK_DRIVER_PYTHON_OPTS='notebook --no-browser --port 8888 --ip 0.0.0.0 --allow-root' pyspark
+# copy/paste into incognito Chrome window w/ external IP address - new URL generated each time so this is just an example
+
+
+http://34.83.80.142:8888/?token=350dbbc1a5074e74bc305ac6e86fbbd4e4ffbb417d8731aa
